@@ -6,11 +6,46 @@ from plotly.subplots import make_subplots
 
 st.set_page_config(page_title="KGJ Strategy Expert", layout="wide")
 
+# Výchozí parametry pro každou lokalitu
+_RAB_KGJ_GAS_INPUT = 1.139          # Rabasova: spotřeba plynu KGJ [MW]
+_RAB_EBOILER_EL_INPUT = 0.414       # Rabasova: max. el. příkon elektrokotle [MW]
+_RAB_EBOILER_EFF = 0.98             # Rabasova: účinnost elektrokotle
+
+LOCALITY_DEFAULTS = {
+    'Behounkova': {
+        'k_th': 1.09, 'k_el': 1.0, 'k_eff': 0.46, 'k_serv': 12.0, 'k_min': 55,
+        'b_max': 3.91, 'b_eff': 0.95, 'ek_max': 0.61, 'ek_eff': 0.98,
+        'dist_ee': 33.0, 'h_cover': 99, 'fixed_heat_price': 120.0,
+    },
+    'Rabasova': {
+        'k_th': 0.592, 'k_el': 0.45, 'k_eff': round(0.592 / _RAB_KGJ_GAS_INPUT, 4), 'k_serv': 7.0, 'k_min': 55,
+        'b_max': 0.4, 'b_eff': 0.95, 'ek_max': round(_RAB_EBOILER_EL_INPUT * _RAB_EBOILER_EFF, 3), 'ek_eff': _RAB_EBOILER_EFF,
+        'dist_ee': 33.0, 'h_cover': 99, 'fixed_heat_price': 120.0,
+    },
+}
+
 # Inicializace stavu aplikace
 if 'fwd_data' not in st.session_state: st.session_state.fwd_data = None
-if 'loc_data' not in st.session_state: st.session_state.loc_data = None
+if 'loc_data' not in st.session_state: st.session_state.loc_data = {'Behounkova': None, 'Rabasova': None}
+if 'locality' not in st.session_state: st.session_state.locality = 'Behounkova'
 
 st.title("🚀 KGJ Strategy & Dispatch Optimizer")
+
+# --- VÝBĚR LOKALITY ---
+btn_col1, btn_col2, _ = st.columns([1, 1, 5])
+with btn_col1:
+    if st.button("📍 Behounkova", type="primary" if st.session_state.locality == 'Behounkova' else "secondary", use_container_width=True):
+        st.session_state.locality = 'Behounkova'
+        st.rerun()
+with btn_col2:
+    if st.button("📍 Rabasova", type="primary" if st.session_state.locality == 'Rabasova' else "secondary", use_container_width=True):
+        st.session_state.locality = 'Rabasova'
+        st.rerun()
+
+loc = st.session_state.locality
+defaults = LOCALITY_DEFAULTS[loc]
+
+st.divider()
 
 # --- 1. KROK: TRŽNÍ DATA (FWD) ---
 with st.sidebar:
@@ -57,36 +92,55 @@ if st.session_state.fwd_data is not None:
         st.plotly_chart(fig, use_container_width=True)
 
 # --- 3. KROK: PARAMETRY ---
-st.header("📍 Parametry lokality a technologií")
+st.header(f"📍 Parametry lokality a technologií – {loc}")
+
+def _locked_number(label, param_key, default, **kwargs):
+    """Number input s tlačítkem odemčení."""
+    ul_key = f"unlock_{loc}_{param_key}"
+    c_val, c_lock = st.columns([6, 1])
+    with c_lock:
+        unlocked = st.checkbox("🔓", key=ul_key, label_visibility="collapsed")
+    with c_val:
+        return st.number_input(label, value=default, disabled=not unlocked, key=f"{loc}_{param_key}", **kwargs)
+
+def _locked_slider_int(label, param_key, default, min_v, max_v):
+    """Integer slider s tlačítkem odemčení."""
+    ul_key = f"unlock_{loc}_{param_key}"
+    c_val, c_lock = st.columns([6, 1])
+    with c_lock:
+        unlocked = st.checkbox("🔓", key=ul_key, label_visibility="collapsed")
+    with c_val:
+        return st.slider(label, min_v, max_v, default, disabled=not unlocked, key=f"{loc}_{param_key}")
+
 col_p1, col_p2 = st.columns(2)
 params = {}
 
 with col_p1:
     if use_kgj:
         st.info("💡 Parametry KGJ")
-        params['k_th'] = st.number_input("Tepelný výkon [MW]", value=1.09)
-        params['k_el'] = st.number_input("Elektrický výkon [MW]", value=1.0)
-        params['k_eff'] = st.number_input("Tepelná účinnost", value=0.46)
-        params['k_serv'] = st.number_input("Servisní náklad [EUR/hod]", value=12.0)
-        params['k_min'] = st.slider("Minimální zatížení [%]", 0, 100, 55) / 100
+        params['k_th'] = _locked_number("Tepelný výkon [MW]", "k_th", defaults['k_th'])
+        params['k_el'] = _locked_number("Elektrický výkon [MW]", "k_el", defaults['k_el'])
+        params['k_eff'] = _locked_number("Tepelná účinnost", "k_eff", defaults['k_eff'])
+        params['k_serv'] = _locked_number("Servisní náklad [EUR/hod]", "k_serv", defaults['k_serv'])
+        params['k_min'] = _locked_slider_int("Minimální zatížení [%]", "k_min", defaults['k_min'], 0, 100) / 100
     if use_boil:
         st.info("🔥 Plynový kotel")
-        params['b_max'] = st.number_input("Max. výkon kotle [MW]", value=3.91)
-        params['b_eff'] = st.number_input("Účinnost kotle", value=0.95)
+        params['b_max'] = _locked_number("Max. výkon kotle [MW]", "b_max", defaults['b_max'])
+        params['b_eff'] = _locked_number("Účinnost kotle", "b_eff", defaults['b_eff'])
 
 with col_p2:
     if use_ek:
         st.info("⚡ Elektrokotel")
-        params['ek_max'] = st.number_input("Max. výkon EK [MW]", value=0.61)
-        params['ek_eff'] = st.number_input("Účinnost EK", value=0.98)
-        params['dist_ee'] = st.number_input("Distribuce nákup EE [EUR/MWh]", value=33.0)
+        params['ek_max'] = _locked_number("Max. výkon EK [MW]", "ek_max", defaults['ek_max'])
+        params['ek_eff'] = _locked_number("Účinnost EK", "ek_eff", defaults['ek_eff'])
+        params['dist_ee'] = _locked_number("Distribuce nákup EE [EUR/MWh]", "dist_ee", defaults['dist_ee'])
     st.info("🏠 Systém")
-    params['h_cover'] = st.slider("Minimální pokrytí potřeby", 0.0, 1.0, 0.99)
-    params['fixed_heat_price'] = st.number_input("Výkupní cena tepla [EUR/MWh]", value=120.0)
+    params['h_cover'] = _locked_slider_int("Minimální pokrytí potřeby [%]", "h_cover", defaults['h_cover'], 0, 100) / 100
+    params['fixed_heat_price'] = _locked_number("Výkupní cena tepla [EUR/MWh]", "fixed_heat_price", defaults['fixed_heat_price'])
 
 # --- 4. KROK: DATA LOKALITY ---
 st.divider()
-loc_file = st.file_uploader("3️⃣ Nahraj potřebu tepla (Excel)", type=["xlsx"])
+loc_file = st.file_uploader(f"3️⃣ Nahraj potřebu tepla pro {loc} (Excel)", type=["xlsx"], key=f"loc_file_{loc}")
 if loc_file:
     df_loc = pd.read_excel(loc_file)
     df_loc.columns = [str(c).strip() for c in df_loc.columns]
@@ -100,12 +154,12 @@ if loc_file:
         if 'cena tepla' in c.lower() or 'prodej' in c.lower(): mapping[c] = 'heat_price'
     
     df_loc = df_loc.rename(columns=mapping)
-    st.session_state.loc_data = df_loc
+    st.session_state.loc_data[loc] = df_loc
 
 # --- 5. KROK: OPTIMALIZACE ---
-if st.session_state.fwd_data is not None and st.session_state.loc_data is not None:
+if st.session_state.fwd_data is not None and st.session_state.loc_data[loc] is not None:
     if st.button("🏁 SPUSTIT KOMPLETNÍ OPTIMALIZACI"):
-        df = pd.merge(st.session_state.fwd_data, st.session_state.loc_data, on='mdh', how='inner')
+        df = pd.merge(st.session_state.fwd_data, st.session_state.loc_data[loc], on='mdh', how='inner')
         T = len(df)
         model = pulp.LpProblem("Dispatcher", pulp.LpMaximize)
         
