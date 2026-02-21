@@ -164,6 +164,7 @@ elif st.session_state.loc_data[loc] is not None:
 if st.session_state.fwd_data is not None and st.session_state.loc_data[loc] is not None:
     if st.button("🏁 SPUSTIT KOMPLETNÍ OPTIMALIZACI"):
         df = pd.merge(st.session_state.fwd_data, st.session_state.loc_data[loc], on='mdh', how='inner')
+        df = df.reset_index(drop=True) 
         T = len(df)
         model = pulp.LpProblem("Dispatcher", pulp.LpMaximize)
         
@@ -295,4 +296,5 @@ if st.session_state.opt_results[loc] is not None:
             file_name=f"optimalizace_{loc}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key=f"dl_xlsx_{loc}",
+
         )
