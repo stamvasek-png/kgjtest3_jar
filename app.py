@@ -3,6 +3,7 @@ import pandas as pd
 import pulp
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import io
 
 st.set_page_config(page_title="KGJ Strategy Expert", layout="wide")
 
@@ -28,6 +29,7 @@ LOCALITY_DEFAULTS = {
 if 'fwd_data' not in st.session_state: st.session_state.fwd_data = None
 if 'loc_data' not in st.session_state: st.session_state.loc_data = {'Behounkova': None, 'Rabasova': None}
 if 'locality' not in st.session_state: st.session_state.locality = 'Behounkova'
+if 'opt_results' not in st.session_state: st.session_state.opt_results = {'Behounkova': None, 'Rabasova': None}
 
 st.title("🚀 KGJ Strategy & Dispatch Optimizer")
 
@@ -155,6 +157,8 @@ if loc_file:
     
     df_loc = df_loc.rename(columns=mapping)
     st.session_state.loc_data[loc] = df_loc
+elif st.session_state.loc_data[loc] is not None:
+    st.info(f"✅ Data pro {loc} jsou načtena ({len(st.session_state.loc_data[loc])} řádků). Nahraj nový soubor pro přepsání.")
 
 # --- 5. KROK: OPTIMALIZACE ---
 if st.session_state.fwd_data is not None and st.session_state.loc_data[loc] is not None:
@@ -212,36 +216,83 @@ if st.session_state.fwd_data is not None and st.session_state.loc_data[loc] is n
         model += pulp.lpSum(profit_total)
         model.solve(pulp.PULP_CBC_CMD(msg=0))
 
-        # --- ZOBRAZENÍ VÝSLEDKŮ ---
-        st.success(f"Optimalizace hotova. Hrubý zisk (po penalizacích): {pulp.value(model.objective):,.0f} EUR")
-        
         t_col = 'datetime_x' if 'datetime_x' in df.columns else ('datetime' if 'datetime' in df.columns else df.columns[0])
         res = pd.DataFrame({
-            'T': df[t_col],
-            'KGJ': [q_kgj[t].value() for t in range(T)],
-            'Kotel': [q_boil[t].value() for t in range(T)],
-            'EK': [q_ek[t].value() for t in range(T)],
-            'Nákup': [q_ext[t].value() for t in range(T)],
-            'Deficit': [q_deficit[t].value() for t in range(T)],
-            'Poptávka': df['demand'] * params['h_cover']
+            'Čas': df[t_col],
+            'KGJ [MW]': [q_kgj[t].value() for t in range(T)],
+            'Kotel [MW]': [q_boil[t].value() for t in range(T)],
+            'EK [MW]': [q_ek[t].value() for t in range(T)],
+            'Nákup [MW]': [q_ext[t].value() for t in range(T)],
+            'Deficit [MW]': [q_deficit[t].value() for t in range(T)],
+            'Poptávka [MW]': df['demand'] * params['h_cover'],
+            'Cena EE [EUR/MWh]': df['ee_price'].values,
+            'Cena plynu [EUR/MWh]': df['gas_price'].values,
         })
 
-        # GRAF 1: DISPATCH
-        fig1 = go.Figure()
-        colors = {'KGJ': '#FF9900', 'Kotel': '#1f77b4', 'EK': '#2ca02c', 'Nákup': '#d62728'}
-        for c in ['KGJ', 'Kotel', 'EK', 'Nákup']:
-            if res[c].sum() > 0.001:
-                fig1.add_trace(go.Bar(x=res['T'], y=res[c], name=c, marker_color=colors[c]))
-        fig1.add_trace(go.Scatter(x=res['T'], y=res['Poptávka'], name="Požadavek", line=dict(color='black', dash='dot')))
-        fig1.update_layout(barmode='stack', title="Hodinový Dispatch zdrojů tepla [MW]", hovermode="x unified")
-        st.plotly_chart(fig1, use_container_width=True)
+        st.session_state.opt_results[loc] = {
+            'res': res,
+            'objective': pulp.value(model.objective),
+        }
 
-        # GRAF 2: DEFICIT (jen pokud existuje)
-        if res['Deficit'].sum() > 0.1:
-            st.warning("⚠️ Systém nedokáže pokrýt veškerou poptávku!")
-            fig2 = go.Figure()
-            fig2.add_trace(go.Scatter(x=res['T'], y=res['Deficit'], fill='tozeroy', name="Nedostatek tepla", line=dict(color='black')))
-            fig2.update_layout(title="Hodinový deficit tepla (Nepokryto) [MW]", yaxis_title="Výkon [MW]")
-            st.plotly_chart(fig2, use_container_width=True)
-        else:
-            st.info("✅ Poptávka je plně pokryta.")
+# --- 6. KROK: ZOBRAZENÍ A EXPORT VÝSLEDKŮ ---
+if st.session_state.opt_results[loc] is not None:
+    opt = st.session_state.opt_results[loc]
+    res = opt['res']
+
+    st.success(f"Optimalizace hotova. Hrubý zisk (po penalizacích): {opt['objective']:,.0f} EUR")
+
+    # GRAF 1: DISPATCH
+    fig1 = go.Figure()
+    colors = {'KGJ [MW]': '#FF9900', 'Kotel [MW]': '#1f77b4', 'EK [MW]': '#2ca02c', 'Nákup [MW]': '#d62728'}
+    for c in ['KGJ [MW]', 'Kotel [MW]', 'EK [MW]', 'Nákup [MW]']:
+        if res[c].sum() > 0.001:
+            fig1.add_trace(go.Bar(x=res['Čas'], y=res[c], name=c, marker_color=colors[c]))
+    fig1.add_trace(go.Scatter(x=res['Čas'], y=res['Poptávka [MW]'], name="Požadavek", line=dict(color='black', dash='dot')))
+    fig1.update_layout(barmode='stack', title="Hodinový Dispatch zdrojů tepla [MW]", hovermode="x unified")
+    st.plotly_chart(fig1, use_container_width=True)
+
+    # GRAF 2: DEFICIT (jen pokud existuje)
+    if res['Deficit [MW]'].sum() > 0.1:
+        st.warning("⚠️ Systém nedokáže pokrýt veškerou poptávku!")
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(x=res['Čas'], y=res['Deficit [MW]'], fill='tozeroy', name="Nedostatek tepla", line=dict(color='black')))
+        fig2.update_layout(title="Hodinový deficit tepla (Nepokryto) [MW]", yaxis_title="Výkon [MW]")
+        st.plotly_chart(fig2, use_container_width=True)
+    else:
+        st.info("✅ Poptávka je plně pokryta.")
+
+    # --- EXPORT ---
+    st.divider()
+    st.subheader("📥 Export výsledků optimalizace")
+    all_cols = [c for c in res.columns if c != 'Čas']
+    selected_cols = st.multiselect(
+        "Vyberte sloupce pro náhled a export:",
+        all_cols,
+        default=all_cols,
+        key=f"export_cols_{loc}",
+    )
+    export_df = res[['Čas'] + selected_cols] if selected_cols else res[['Čas']]
+    st.dataframe(export_df, use_container_width=True)
+
+    exp_col1, exp_col2 = st.columns(2)
+    with exp_col1:
+        csv_bytes = export_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="⬇️ Stáhnout jako CSV",
+            data=csv_bytes,
+            file_name=f"optimalizace_{loc}.csv",
+            mime="text/csv",
+            key=f"dl_csv_{loc}",
+        )
+    with exp_col2:
+        xlsx_buf = io.BytesIO()
+        with pd.ExcelWriter(xlsx_buf, engine='openpyxl') as writer:
+            export_df.to_excel(writer, index=False, sheet_name='Optimalizace')
+        xlsx_buf.seek(0)
+        st.download_button(
+            label="⬇️ Stáhnout jako Excel",
+            data=xlsx_buf,
+            file_name=f"optimalizace_{loc}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"dl_xlsx_{loc}",
+        )
