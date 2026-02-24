@@ -145,6 +145,9 @@ with t_gen:
         p['ee_sell_fix_ratio'] = st.slider("Podíl fixace [%]", 0, 100, 80) / 100
         p['ee_sell_fix_price'] = st.number_input("Fixní výkupní cena EE [€/MWh]",
             value=float(st.session_state.avg_ee_raw))
+    else:
+        p['ee_sell_fix_ratio'] = 0.0
+        p['ee_sell_fix_price'] = 0.0
 
 with t_tech:
     if use_kgj:
@@ -344,7 +347,9 @@ if st.session_state.fwd_data is not None and loc_file is not None:
                 bess_dist_sell_cost = p['dist_ee_sell'] * bess_dis[t] if (use_bess and p.get('bess_dist_sell')) else 0
 
                 if p.get('ee_sell_fix'):
-                    p_ee_sell = p['ee_sell_fix_ratio'] * p['ee_sell_fix_price'] + (1 - p['ee_sell_fix_ratio']) * p_ee_m
+                    fix_ratio = p.get('ee_sell_fix_ratio', 0.0)
+                    fix_price = p.get('ee_sell_fix_price', p_ee_m)
+                    p_ee_sell = fix_ratio * fix_price + (1 - fix_ratio) * p_ee_m
                 else:
                     p_ee_sell = p_ee_m
 
@@ -371,10 +376,11 @@ if st.session_state.fwd_data is not None and loc_file is not None:
         status_str = pulp.LpStatus[status]
         obj_val    = pulp.value(model.objective)
         st.subheader("📋 Výsledky optimalizace")
-        st.write(f"**Solver status:** {status_str} | **Účelová funkce:** {obj_val:,.0f} €")
+        st.write(f"**Solver status:** {status_str} (kód {status}) | **Účelová funkce:** {obj_val:,.0f} €")
 
         if status not in (1, 2):
-            st.error("Optimalizace nenašla přijatelné řešení. Zkontroluj parametry.")
+            st.error(f"Optimalizace nenašla přijatelné řešení (status: {status_str}, kód: {status}). "
+                     f"Zkontroluj parametry – zejména pokrytí poptávky, kapacity zdrojů a cenové vstupy.")
             st.stop()
 
         # ── Extrakce výsledků ─────────────────────────────
@@ -425,7 +431,9 @@ if st.session_state.fwd_data is not None and loc_file is not None:
             p_ee_ekh = p.get('ek_ee_fix_price',    p_ee_m)  if (use_ek   and p.get('ek_ee_fix'))   else p_ee_m
 
             if p.get('ee_sell_fix'):
-                p_ee_sell = p['ee_sell_fix_ratio'] * p['ee_sell_fix_price'] + (1 - p['ee_sell_fix_ratio']) * p_ee_m
+                fix_ratio = p.get('ee_sell_fix_ratio', 0.0)
+                fix_price = p.get('ee_sell_fix_price', p_ee_m)
+                p_ee_sell = fix_ratio * fix_price + (1 - fix_ratio) * p_ee_m
             else:
                 p_ee_sell = p_ee_m
 
@@ -665,7 +673,13 @@ if st.session_state.fwd_data is not None and loc_file is not None:
         # ── Graf 9 – Složení příjmů a nákladů (waterfall) ─
         st.subheader("💵 Rozpad zisku – příjmy a náklady")
         rev_teplo = p['h_price'] * res['Dodáno tepla [MW]'].sum()
-        rev_ee    = (res['Cena EE [€/MWh]'] * res['EE export [MW]']).sum()
+        if p.get('ee_sell_fix'):
+            fix_ratio = p.get('ee_sell_fix_ratio', 0.0)
+            fix_price = p.get('ee_sell_fix_price', 0.0)
+            blended_ee_price = fix_ratio * fix_price + (1 - fix_ratio) * res['Cena EE [€/MWh]']
+            rev_ee = (blended_ee_price * res['EE export [MW]']).sum()
+        else:
+            rev_ee    = (res['Cena EE [€/MWh]'] * res['EE export [MW]']).sum()
         c_gas_kgj = sum(
             (p.get('kgj_gas_fix_price', df['gas_price'].iloc[t]) + p['gas_dist'])
             * res['KGJ [MW_th]'].iloc[t] / p['k_eff_th']
