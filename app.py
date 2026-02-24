@@ -340,6 +340,9 @@ if st.session_state.fwd_data is not None and loc_file is not None:
                 ee_ek_in   = q_ek[t] / ek_eff                            if use_ek  else 0
                 model += ee_kgj_out + fve_p + ee_import[t] + bess_dis[t] == ee_ek_in + bess_cha[t] + ee_export[t]
 
+                # Omezení: export EE nesmí překročit lokální výrobu (zabraňuje arbitráži import→export)
+                model += ee_export[t] <= ee_kgj_out + fve_p + bess_dis[t]
+
                 dist_sell_net = p['dist_ee_sell'] if not p['internal_ee_use'] else 0.0
                 dist_buy_net  = p['dist_ee_buy']  if not p['internal_ee_use'] else 0.0
 
