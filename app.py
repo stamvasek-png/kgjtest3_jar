@@ -140,6 +140,11 @@ with t_gen:
         p['h_cover']           = st.slider("Minimální pokrytí poptávky tepla", 0.0, 1.0, 0.99, step=0.01)
         p['shortfall_penalty'] = st.number_input("Penalizace za nedodání tepla [€/MWh]", value=500.0,
             help="Doporučeno 3–5× cena tepla. Vyšší hodnota = silnější priorita pokrytí poptávky.")
+    p['ee_sell_fix'] = st.checkbox("Fixní výkupní cena EE pro export")
+    if p['ee_sell_fix']:
+        p['ee_sell_fix_ratio'] = st.slider("Podíl fixace [%]", 0, 100, 80) / 100
+        p['ee_sell_fix_price'] = st.number_input("Fixní výkupní cena EE [€/MWh]",
+            value=float(st.session_state.avg_ee_raw))
 
 with t_tech:
     if use_kgj:
@@ -338,9 +343,14 @@ if st.session_state.fwd_data is not None and loc_file is not None:
                 bess_dist_buy_cost  = p['dist_ee_buy']  * bess_cha[t] if (use_bess and p.get('bess_dist_buy'))  else 0
                 bess_dist_sell_cost = p['dist_ee_sell'] * bess_dis[t] if (use_bess and p.get('bess_dist_sell')) else 0
 
+                if p.get('ee_sell_fix'):
+                    p_ee_sell = p['ee_sell_fix_ratio'] * p['ee_sell_fix_price'] + (1 - p['ee_sell_fix_ratio']) * p_ee_m
+                else:
+                    p_ee_sell = p_ee_m
+
                 revenue = (
                     p['h_price'] * heat_delivered
-                    + (p_ee_m - dist_sell_net) * ee_export[t]
+                    + (p_ee_sell - dist_sell_net) * ee_export[t]
                 )
                 costs = (
                     ((p_gas_kgj  + p['gas_dist']) * (q_kgj[t]  / p['k_eff_th']) if use_kgj      else 0) +
@@ -414,8 +424,13 @@ if st.session_state.fwd_data is not None and loc_file is not None:
             p_gas_bh = p.get('boil_gas_fix_price', p_gas_m) if (use_boil and p.get('boil_gas_fix')) else p_gas_m
             p_ee_ekh = p.get('ek_ee_fix_price',    p_ee_m)  if (use_ek   and p.get('ek_ee_fix'))   else p_ee_m
 
+            if p.get('ee_sell_fix'):
+                p_ee_sell = p['ee_sell_fix_ratio'] * p['ee_sell_fix_price'] + (1 - p['ee_sell_fix_ratio']) * p_ee_m
+            else:
+                p_ee_sell = p_ee_m
+
             rev  = (p['h_price'] * res['Dodáno tepla [MW]'].iloc[t]
-                    + (p_ee_m - p['dist_ee_sell']) * res['EE export [MW]'].iloc[t])
+                    + (p_ee_sell - p['dist_ee_sell']) * res['EE export [MW]'].iloc[t])
             c_gas  = ((p_gas_kj + p['gas_dist']) * (res['KGJ [MW_th]'].iloc[t]  / p['k_eff_th']) if use_kgj  else 0)
             c_gas += ((p_gas_bh + p['gas_dist']) * (res['Kotel [MW_th]'].iloc[t] / boil_eff)      if use_boil else 0)
             c_ee   = (p_ee_m  + p['dist_ee_buy'])  * res['EE import [MW]'].iloc[t]
